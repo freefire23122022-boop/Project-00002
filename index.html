@@ -1,0 +1,308 @@
+
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Shadow Quest - Neon Run</title>
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;background:#080d1c;color:white;
+ font-family:Arial,sans-serif;overflow:hidden;
+ touch-action:none
+}
+.app{width:100%;max-width:1000px;margin:auto;padding:10px}
+header{display:flex;justify-content:space-between;align-items:center;gap:8px}
+h1{font-size:clamp(18px,4vw,28px);margin:8px 0;color:#66f5ff}
+button{
+ border:1px solid #3c668c;background:#132544;color:white;
+ border-radius:12px;padding:12px 16px;font-weight:bold;
+ cursor:pointer;touch-action:none
+}
+button:active{background:#17617c;transform:scale(.96)}
+.stats{display:flex;gap:8px;margin:10px 0}
+.stat{flex:1;background:#111d35;border:1px solid #233e60;
+ border-radius:10px;padding:9px;text-align:center;font-size:12px}
+.stat b{display:block;color:#66f5ff;font-size:19px;margin-top:4px}
+.gamebox{position:relative;border:2px solid #244d70;
+ border-radius:15px;overflow:hidden;background:#080d25}
+canvas{display:block;width:100%;height:auto;aspect-ratio: 16 / 10}
+.overlay{
+ position:absolute;inset:0;background:#071020d9;
+ display:flex;align-items:center;justify-content:center;
+ flex-direction:column;text-align:center;padding:20px
+}
+.overlay h2{font-size:clamp(25px,7vw,42px);color:#65f4ff;margin:5px}
+.overlay p{line-height:1.6;color:#d2e3ff;max-width:330px}
+.hidden{display:none}
+.controls{display:flex;justify-content:space-between;
+ align-items:center;gap:14px;margin-top:12px}
+.group{display:flex;gap:10px}
+.ctrl{width:65px;height:60px;font-size:23px;
+ background:#142746;border-color:#4383b1}
+.jump{width:95px;background:#174d60;border-color:#54e9ff}
+.help{text-align:center;font-size:12px;color:#92a9c9;margin-top:12px}
+@media(max-width:380px){
+ .app{padding:6px}.ctrl{width:55px;height:54px}
+ .jump{width:75px}.controls{gap:6px}.group{gap:6px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+<header>
+ <h1>⚡ SHADOW QUEST</h1>
+ <button id="soundBtn">🔊 Sound</button>
+</header>
+
+<div class="stats">
+ <div class="stat">SCORE<b id="score">0</b></div>
+ <div class="stat">COINS<b id="coins">0</b></div>
+ <div class="stat">LEVEL<b id="level">1</b></div>
+</div>
+
+<div class="gamebox">
+ <canvas id="game" width="800" height="500"></canvas>
+ <div class="overlay" id="menu">
+  <div style="font-size:48px">🚀</div>
+  <h2 id="menuTitle">SHADOW QUEST</h2>
+  <p id="menuText">কয়েন সংগ্রহ করো, বাধা এড়িয়ে যাও এবং নতুন লেভেলে পৌঁছাও!</p>
+  <button id="startBtn">▶ PLAY NOW</button>
+ </div>
+</div>
+
+<div class="controls">
+ <div class="group">
+  <button class="ctrl" id="left" aria-label="Left">◀</button>
+  <button class="ctrl" id="right" aria-label="Right">▶</button>
+ </div>
+ <button class="ctrl jump" id="jump">⬆ JUMP</button>
+</div>
+<div class="help">মোবাইলে বোতাম চেপে ধরো • কম্পিউটারে ← → এবং Space</div>
+</div>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+const $=id=>document.getElementById(id);
+const W=800,H=500;
+let running=false,score=0,coins=0,level=1;
+let frame=0,camera=0,last=0,raf=0;
+let keys={left:false,right:false};
+let player,platforms,items,hazards,particles;
+let sound=true,audioCtx=null;
+const rand=(a,b)=>Math.random()*(b-a)+a;
+
+function reset(){
+ score=0;coins=0;level=1;frame=0;camera=0;
+ player={x:80,y:330,w:32,h:42,vx:0,vy:0,ground:false};
+ platforms=[];items=[];hazards=[];particles=[];
+ platforms.push({x:0,y:420,w:500,h:80});
+ let end=500;
+ for(let i=0;i<100;i++){
+  let gap=rand(65,105),width=rand(120,230);
+  let x=end+gap,y=rand(310,410);
+  platforms.push({x,y,w:width,h:90});
+  if(Math.random()<.8)
+   items.push({x:x+rand(20,width-20),y:y-35,r:11,taken:false});
+  if(i%3===1)
+   hazards.push({x:x+width*.65,y:y-20,w:24,h:20});
+  end=x+width;
+ }
+ platforms.push({x:end,y:420,w:400,h:80});
+ updateHUD();
+}
+function updateHUD(){
+ $("score").textContent=score;
+ $("coins").textContent=coins;
+ $("level").textContent=level;
+}
+function beep(freq=600){
+ if(!sound)return;
+ try{
+  audioCtx ||=new (window.AudioContext||window.webkitAudioContext)();
+  if(audioCtx.state==="suspended")audioCtx.resume();
+  let o=audioCtx.createOscillator(),g=audioCtx.createGain();
+  o.frequency.value=freq;g.gain.value=.045;
+  o.connect(g);g.connect(audioCtx.destination);
+  o.start();g.gain.exponentialRampToValueAtTime(.001,audioCtx.currentTime+.12);
+  o.stop(audioCtx.currentTime+.13);
+ }catch(e){}
+}
+$("soundBtn").onclick=()=>{
+ sound=!sound;$("soundBtn").textContent=sound?"🔊 Sound":"🔇 Sound";
+};
+function burst(x,y,color){
+ for(let i=0;i<9;i++)
+  particles.push({x,y,vx:rand(-3,3),vy:rand(-4,1),
+   life:25,color});
+}
+function start(){
+ cancelAnimationFrame(raf);
+ reset();running=true;
+ $("menu").classList.add("hidden");
+ last=performance.now();raf=requestAnimationFrame(loop);
+}
+function endGame(){
+ running=false;
+ $("menuTitle").textContent="GAME OVER";
+ $("menuText").textContent=`স্কোর: ${score} • কয়েন: ${coins}। আবার চেষ্টা করো!`;
+ $("startBtn").textContent="↻ PLAY AGAIN";
+ $("menu").classList.remove("hidden");
+ beep(180);
+}
+$("startBtn").onclick=start;
+
+function bindHold(id,key){
+ const b=$(id);
+ const on=e=>{e.preventDefault();keys[key]=true;
+  try{b.setPointerCapture(e.pointerId)}catch(_){}};
+ const off=e=>{e.preventDefault();keys[key]=false};
+ b.addEventListener("pointerdown",on);
+ ["pointerup","pointercancel","lostpointercapture"].forEach(ev=>
+  b.addEventListener(ev,off));
+}
+bindHold("left","left");bindHold("right","right");
+function jump(){
+ if(!running)return;
+ if(player.ground){player.vy=-13;player.ground=false;beep(440)}
+}
+$("jump").addEventListener("pointerdown",e=>{e.preventDefault();jump()});
+document.addEventListener("keydown",e=>{
+ if(["ArrowLeft","ArrowRight"," ","ArrowUp"].includes(e.key))e.preventDefault();
+ if(e.key==="ArrowLeft")keys.left=true;
+ if(e.key==="ArrowRight")keys.right=true;
+ if(e.key===" "||e.key==="ArrowUp")jump();
+});
+document.addEventListener("keyup",e=>{
+ if(e.key==="ArrowLeft")keys.left=false;
+ if(e.key==="ArrowRight")keys.right=false;
+});
+window.addEventListener("blur",()=>{keys.left=keys.right=false});
+
+function loop(now){
+ if(!running)return;
+ let dt=Math.min((now-last)/16.67,2);last=now;
+ update(dt);draw();
+ raf=requestAnimationFrame(loop);
+}
+function update(dt){
+ frame+=dt;
+ let p=player;
+ let speed=4.2+(level-1)*.35;
+ p.vx=keys.right?speed:keys.left?-speed:0;
+ p.x+=p.vx*dt;
+ p.vy+=.62*dt;
+ p.y+=p.vy*dt;p.ground=false;
+
+ for(const pl of platforms){
+  if(p.x+p.w>pl.x&&p.x<pl.x+pl.w&&
+     p.y+p.h>=pl.y&&p.y+p.h<=pl.y+20&&p.vy>=0){
+   p.y=pl.y-p.h;p.vy=0;p.ground=true;
+  }
+ }
+ if(p.x<camera)p.x=camera;
+ if(p.y>H+100){endGame();return}
+
+ camera=Math.max(0,p.x-180);
+ for(const it of items){
+  if(!it.taken&&Math.hypot(p.x+p.w/2-it.x,p.y+p.h/2-it.y)<28){
+   it.taken=true;coins++;score+=10;beep(800);
+   burst(it.x,it.y,"#ffe66d");updateHUD();
+  }
+ }
+ for(const hz of hazards){
+  if(p.x+p.w>hz.x&&p.x<hz.x+hz.w&&
+     p.y+p.h>hz.y&&p.y<hz.y+hz.h){
+   endGame();return;
+  }
+ }
+ // Level advances with distance
+ let newLevel=1+Math.floor(p.x/1300);
+ if(newLevel>level){level=newLevel;score+=100;beep(950);updateHUD()}
+ score+=Math.max(0,Math.floor(p.vx*dt*.025));
+ updateHUD();
+ particles=particles.filter(a=>a.life>0);
+ for(const a of particles){a.x+=a.vx*dt;a.y+=a.vy*dt;a.vy+=.12*dt;a.life-=dt}
+}
+function draw(){
+ let g=ctx;
+ g.clearRect(0,0,W,H);
+ let sky=g.createLinearGradient(0,0,0,H);
+ sky.addColorStop(0,"#101b43");sky.addColorStop(1,"#29164a");
+ g.fillStyle=sky;g.fillRect(0,0,W,H);
+
+ // Stars
+ for(let i=0;i<70;i++){
+  let x=((i*127-camera*.12)%W+W)%W;
+  let y=(i*67)%290;
+  g.fillStyle=i%3===0?"#6cf5ff":"#ffffff88";
+  g.fillRect(x,y,2,2);
+ }
+ // Distant city
+ for(let i=0;i<18;i++){
+  let x=((i*100-camera*.25)%1000+1000)%1000-80;
+  let bh=70+(i*37%110);
+  g.fillStyle="#17264b";g.fillRect(x,420-bh,65,bh);
+  g.fillStyle="#3b80a477";
+  for(let wy=435-bh;wy<410;wy+=18)
+   for(let wx=x+10;wx<x+55;wx+=18)g.fillRect(wx,wy,5,7);
+ }
+ // Platforms
+ for(const pl of platforms){
+  let x=pl.x-camera;if(x>W||x+pl.w<0)continue;
+  g.fillStyle="#18284a";g.fillRect(x,pl.y,pl.w,pl.h);
+  g.fillStyle="#53edff";g.fillRect(x,pl.y,pl.w,4);
+  g.fillStyle="#324a70";g.fillRect(x,pl.y+5,pl.w,3);
+ }
+ // Coins
+ for(const it of items){
+  if(it.taken)continue;
+  let x=it.x-camera;
+  if(x< -30||x>W+30)continue;
+  let pulse=1+Math.sin(frame*.12+it.x)*.15;
+  g.save();g.translate(x,it.y);g.scale(pulse,1);
+  g.shadowBlur=18;g.shadowColor="#ffd84d";
+  g.fillStyle="#ffdc5e";g.beginPath();g.arc(0,0,it.r,0,Math.PI*2);g.fill();
+  g.fillStyle="#fff3a4";g.beginPath();g.arc(-3,-3,4,0,Math.PI*2);g.fill();
+  g.restore();
+ }
+ // Spikes
+ for(const hz of hazards){
+  let x=hz.x-camera;if(x< -30||x>W+30)continue;
+  g.fillStyle="#ff4d83";g.shadowBlur=10;g.shadowColor="#ff246c";
+  g.beginPath();g.moveTo(x,hz.y+hz.h);g.lineTo(x+hz.w/2,hz.y);
+  g.lineTo(x+hz.w,hz.y+hz.h);g.fill();g.shadowBlur=0;
+ }
+ // Player with animated glow
+ let p=player,x=p.x-camera,y=p.y;
+ g.save();g.shadowBlur=20;g.shadowColor="#42efff";
+ g.fillStyle="#5beaff";
+ g.fillRoundRect(x,y+7,p.w,p.h-7,8);
+ g.shadowBlur=0;
+ g.fillStyle="#102039";g.fillRect(x+6,y+14,20,11);
+ g.fillStyle="#ffffff";g.fillRect(x+9,y+16,5,5);g.fillRect(x+20,y+16,5,5);
+ g.fillStyle="#ffdc68";g.fillRect(x+7,y+p.h-3,7,7);
+ g.fillRect(x+21,y+p.h-3,7,7);
+ // Scarf
+ g.fillStyle="#ff4f91";
+ g.beginPath();g.moveTo(x+4,y+12);g.lineTo(x-12-Math.sin(frame*.2)*5,y+24);
+ g.lineTo(x+5,y+22);g.fill();
+ g.restore();
+ for(const a of particles){
+  g.globalAlpha=Math.max(0,a.life/25);g.fillStyle=a.color;
+  g.fillRect(a.x-camera,a.y,5,5);
+ }
+ g.globalAlpha=1;
+ // Progress strip
+ g.fillStyle="#ffffff30";g.fillRect(15,15,180,5);
+ g.fillStyle="#63efff";g.fillRect(15,15,(p.x%1300)/1300*180,5);
+ g.fillStyle="white";g.font="12px Arial";
+ g.fillText("DISTANCE "+Math.floor(p.x)+" m",15,37);
+}
+reset();draw();
+</script>
+</body>
+  </html>
+  
